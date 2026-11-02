@@ -206,13 +206,15 @@ class TestMatchPrefix:
         assert tree.match_prefix([9, 9]) == 0
         assert tree.match_prefix([]) == 0
 
-    def test_match_does_not_change_the_structure(self):
+    def test_full_match_does_not_change_the_structure(self):
+        """A complete hit only touches stamps; only a partial hit splits."""
         tree = RadixTree()
         tree.insert([1, 2, 3])
         before = leaf_paths(tree)
         tree.match_prefix([1, 2, 3])
         assert tree.total_tokens == 3
         assert leaf_paths(tree) == before
+        assert len(list(iter_nodes(tree))) == 2
 
 
 class TestSplit:
@@ -359,6 +361,37 @@ class TestEvict:
             tree.insert(seq)
         tree.evict(2)
         assert_invariants(tree, known)
+
+    def test_partial_match_keeps_the_matched_prefix_hot(self):
+        """The reused prefix survives; the untouched tail is the coldest thing left."""
+        tree = RadixTree()
+        tree.insert([1, 2, 3, 4])
+        tree.insert([5, 6, 7])
+        assert tree.match_prefix([1, 2, 9]) == 2
+        assert tree.evict(2) == 2
+        assert leaf_paths(tree) == [(1, 2), (5, 6, 7)]
+
+    def test_partial_match_splits_at_the_hit_boundary(self):
+        """A partial hit carves the matched prefix into its own node."""
+        tree = RadixTree()
+        tree.insert([1, 2, 3, 4])
+        assert tree.match_prefix([1, 2, 9]) == 2
+        prefix = next(iter(tree.root.children.values()))
+        assert tuple(prefix.key) == (1, 2)
+        tail = next(iter(prefix.children.values()))
+        assert tuple(tail.key) == (3, 4)
+        assert prefix.last_access_time > tail.last_access_time
+        assert tree.total_tokens == 4
+        assert_invariants(tree, [[1, 2, 3, 4]])
+
+    def test_miss_leaves_lru_order_untouched(self):
+        """A query that shares no token must not warm anything up."""
+        tree = RadixTree()
+        tree.insert([1, 2, 3])
+        tree.insert([5, 6, 7])
+        assert tree.match_prefix([9, 9]) == 0
+        assert tree.evict(3) == 3
+        assert leaf_paths(tree) == [(5, 6, 7)]
 
     def test_insert_after_full_eviction_works(self):
         tree = RadixTree()
